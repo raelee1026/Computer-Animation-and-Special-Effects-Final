@@ -167,8 +167,8 @@ class RopeSimulation:
         # Update shared top particle position
         x[0] = self.top_particle_pos.copy()
         
-        # Higher stiffness for stability (3000 N/m as mentioned in paper)
-        stiff = 1000.0
+        # stiffness for spring forces
+        stiff = 300
         
         # Use multiple substeps for stability (20 as mentioned in paper)
         substeps = 40
