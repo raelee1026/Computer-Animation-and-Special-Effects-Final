@@ -3,10 +3,10 @@ import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 
 # --- Parameters ---
-num_particles = 20
-l0 = 1.0
-dt = 0.05
-s_damping = 0.9
+num_particles = 50
+l0 = 0.5  # distance between particles
+dt = 0.05  # time step
+s_damping = 0.8  # damping factor for spring forces
 gravity = np.array([0, -9.81])
 
 # --- Initialize strand ---
@@ -57,18 +57,18 @@ fig.canvas.mpl_connect('motion_notify_event', on_motion)
 def simulate_step():
     global x, v
 
-    # 1️⃣ Top particle follows drag position
+    #Top particle follows drag position
     x[0] = drag_pos
     v[0] = np.array([0, 0])  # fixed
 
-    # 2️⃣ Apply gravity
+    #Apply gravity
     for i in range(1, num_particles):
         f[i] = gravity
 
-    # 3️⃣ Predict position
+    #Predict position
     p = x + dt * v + (dt ** 2) * f
 
-    # 4️⃣ FTL projection
+    #FTL projection
     d = np.zeros((num_particles, 2))
     p[0] = x[0]
 
@@ -79,9 +79,9 @@ def simulate_step():
         d[i] = correction
         p[i] += correction
 
-    # 5️⃣ Velocity correction
+    #Velocity correction
     for i in range(1, num_particles - 1):
-        v[i] = (p[i] - x[i]) / dt + s_damping * ( -d[i + 1] ) / dt
+        v[i] = (p[i] - x[i]) / dt + s_damping * ( -d[i + 1]  / dt)
     v[-1] = (p[-1] - x[-1]) / dt
 
     # 6️⃣ Update positions
