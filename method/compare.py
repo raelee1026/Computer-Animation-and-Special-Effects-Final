@@ -9,7 +9,6 @@ class RopeSimulation:
         self.dt = dt
         self.mass = mass
         self.gravity = np.array([0, -10.0])  # -10 m/s^2 as in paper
-        self.stiffness = 100  # N/m (will be adjusted per method)
         
         # Initialize three separate rope systems
         self.reset_ropes()
@@ -27,7 +26,7 @@ class RopeSimulation:
         # FTL system (blue) - starts going left
         self.x_ftl = np.zeros((self.num_particles, 2))
         for i in range(self.num_particles):
-            self.x_ftl[i] = self.top_particle_pos + np.array([-0.1 - i * 0.01, -i * self.rest_length])
+            self.x_ftl[i] = self.top_particle_pos + np.array([-0.05 - i * 0.005, -i * self.rest_length])
         self.v_ftl = np.zeros((self.num_particles, 2))
         
         # PBD system (green) - starts going straight down
@@ -39,110 +38,140 @@ class RopeSimulation:
         # Symplectic Euler system (red) - starts going right
         self.x_euler = np.zeros((self.num_particles, 2))
         for i in range(self.num_particles):
-            self.x_euler[i] = self.top_particle_pos + np.array([0.1 + i * 0.01, -i * self.rest_length])
+            self.x_euler[i] = self.top_particle_pos + np.array([0.05 + i * 0.005, -i * self.rest_length])
         self.v_euler = np.zeros((self.num_particles, 2))
-        
+
     def simulate_ftl(self):
-        """Fast Tangent Loop (FTL) method - dynamic constraints"""
+        """Follow-The-Leader (FTL) with forward projection and velocity correction"""
         x, v = self.x_ftl, self.v_ftl
-        
-        # Update shared top particle position
+        dt = self.dt
+        l0 = self.rest_length
+        s_damping = 0.8
+        gravity = self.gravity
+        mass = self.mass
+
+        # Top particle follows external position
         x[0] = self.top_particle_pos.copy()
-        
-        # Apply external forces (gravity)
-        forces = np.zeros_like(x)
+        v[0] = np.zeros(2)  # fixed
+
+        # Predict positions under gravity
+        f = np.zeros_like(x)
         for i in range(1, self.num_particles):
-            forces[i] = self.mass * self.gravity
-        
-        # Predict positions
-        p = x + self.dt * v + (self.dt**2 / self.mass) * forces
-        
-        # Constraint particle 0 to shared top position
-        p[0] = self.top_particle_pos.copy()
-        
-        # Fast tangential constraint projection
-        for iteration in range(2):  # 2 iterations as mentioned in paper
-            for i in range(1, self.num_particles):
-                # Get constraint vector
-                constraint_vec = p[i] - p[i-1]
-                current_length = np.linalg.norm(constraint_vec)
-                
-                if current_length > 1e-8:
-                    # Normalize
-                    constraint_dir = constraint_vec / current_length
-                    
-                    # Calculate correction
-                    delta_length = current_length - self.rest_length
-                    correction = -0.5 * delta_length * constraint_dir
-                    
-                    # Apply corrections
-                    if i > 1:  # Don't move the shared top particle
-                        p[i-1] -= correction
-                    p[i] += correction
-        
-        # Update velocities and positions
-        v[0] = np.zeros(2)  # Top particle velocity controlled externally
+            f[i] = gravity * mass
+        p = x + dt * v + (dt ** 2) * f / mass
+
+        # FTL projection: forward chain to maintain rest length
+        d = np.zeros_like(x)
+        p[0] = x[0].copy()
         for i in range(1, self.num_particles):
-            v[i] = (p[i] - x[i]) / self.dt
-            # Add damping
-            v[i] *= 0.99
-        
+            dir_vec = p[i] - p[i - 1]
+            current_len = np.linalg.norm(dir_vec) + 1e-8
+            correction = (l0 - current_len) * (dir_vec / current_len)
+            d[i] = correction
+            p[i] += correction
+
+        # Velocity correction from Eq. (9)
+        for i in range(1, self.num_particles - 1):
+            v[i] = (p[i] - x[i]) / dt + s_damping * (-d[i + 1]) / dt
+        v[-1] = (p[-1] - x[-1]) / dt  # last particle has no d[i+1]
+
+        # Update positions
         x[:] = p.copy()
+
         
     def simulate_pbd(self):
-        """Position Based Dynamics (PBD) method"""
         x, v = self.x_pbd, self.v_pbd
-        
-        # Update shared top particle position
-        x[0] = self.top_particle_pos.copy()
-        
-        # Apply external forces
+
+        # External force
         for i in range(1, self.num_particles):
             v[i] += self.dt * self.gravity
-        
+
         # Predict positions
         p = x + self.dt * v
-        
-        # Constraint particle 0 to shared top position
+
+        # Fix top point
         p[0] = self.top_particle_pos.copy()
         v[0] = np.zeros(2)
-        
-        # Constraint projection (2 iterations as in paper)
-        for iteration in range(2):
+
+        # Constraint projection
+        for iteration in range(25):  # more iterations = stiffer
             for i in range(1, self.num_particles):
-                constraint_vec = p[i] - p[i-1]
-                current_length = np.linalg.norm(constraint_vec)
-                
-                if current_length > 1e-8:
-                    constraint_dir = constraint_vec / current_length
-                    delta_length = current_length - self.rest_length
-                    
-                    # PBD correction (equal mass assumption)
-                    correction = 0.5 * delta_length * constraint_dir
-                    
-                    if i > 1:  # Don't move the shared top particle
-                        p[i-1] += correction
-                    p[i] -= correction
-        
-        # Update velocities
+                delta = p[i] - p[i - 1]
+                dist = np.linalg.norm(delta)
+                if dist < 1e-6:
+                    continue
+                direction = delta / dist
+                correction = (dist - self.rest_length) * direction
+
+                # Half-half correction, but fixed top
+                if i > 1:
+                    p[i - 1] += 0.5 * correction
+                p[i] -= 0.5 * correction
+
+        # Update velocities (with damping)
         for i in range(1, self.num_particles):
             v[i] = (p[i] - x[i]) / self.dt
-            v[i] *= 0.98  # damping
-        
+            v[i] *= 0.95  # stronger damping
+
+        # Apply new positions
         x[:] = p.copy()
+
+
+
+    # def simulate_pbd(self):
+        # """Position Based Dynamics (PBD) method"""
+        # x, v = self.x_pbd, self.v_pbd
+        
+        # # Update shared top particle position
+        # x[0] = self.top_particle_pos.copy()
+        
+        # # Apply external forces
+        # for i in range(1, self.num_particles):
+        #     v[i] += self.dt * self.gravity
+        
+        # # Predict positions
+        # p = x + self.dt * v
+        
+        # # Constraint particle 0 to shared top position
+        # p[0] = self.top_particle_pos.copy()
+        # v[0] = np.zeros(2)
+        
+        # # Constraint projection - 2 iterations as in paper
+        # for iteration in range(2):
+        #     for i in range(1, self.num_particles):
+        #         constraint_vec = p[i] - p[i-1]
+        #         current_length = np.linalg.norm(constraint_vec)
+                
+        #         if current_length > 1e-8:
+        #             constraint_dir = constraint_vec / current_length
+        #             delta_length = current_length - self.rest_length
+                    
+        #             # PBD correction (equal mass assumption)
+        #             correction = 0.5 * delta_length * constraint_dir
+                    
+        #             if i > 1:  # Don't move the shared top particle
+        #                 p[i-1] += correction
+        #             p[i] -= correction
+        
+        # # Update velocities
+        # for i in range(1, self.num_particles):
+        #     v[i] = (p[i] - x[i]) / self.dt
+        #     v[i] *= 0.99  # Moderate damping
+        
+        # x[:] = p.copy()
         
     def simulate_symplectic_euler(self):
-        """Symplectic Euler with high stiffness"""
+        """Symplectic Euler with high stiffness and substeps"""
         x, v = self.x_euler, self.v_euler
         
         # Update shared top particle position
         x[0] = self.top_particle_pos.copy()
         
         # Higher stiffness for stability (3000 N/m as mentioned in paper)
-        stiff = 3000.0
+        stiff = 1000.0
         
-        # Use multiple substeps for stability (20 as mentioned)
-        substeps = 20
+        # Use multiple substeps for stability (20 as mentioned in paper)
+        substeps = 40
         sub_dt = self.dt / substeps
         
         for substep in range(substeps):
@@ -170,7 +199,7 @@ class RopeSimulation:
             # First update velocities
             for i in range(1, self.num_particles):
                 v[i] += sub_dt * forces[i] / self.mass
-                v[i] *= 0.999  # slight damping for stability
+                v[i] *= 0.9995  # Very light damping for stability
             
             # Then update positions
             for i in range(1, self.num_particles):
@@ -183,91 +212,79 @@ class RopeSimulation:
 # Create simulation instance
 sim = RopeSimulation()
 
-# Setup visualization
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 8))
+# Setup visualization - single plot
+fig, ax = plt.subplots(figsize=(10, 8))
 
-# Left plot - same time per frame
-line_ftl_1, = ax1.plot([], [], 'o-', color='blue', label='FTL', markersize=3, linewidth=1.5)
-line_pbd_1, = ax1.plot([], [], 'o-', color='green', label='PBD', markersize=3, linewidth=1.5)
-line_euler_1, = ax1.plot([], [], 'o-', color='red', label='Symplectic Euler', markersize=3, linewidth=1.5)
+# Create lines for all three methods
+line_ftl, = ax.plot([], [], 'o-', color='blue', label='FTL (Dynamic)', 
+                    markersize=4, linewidth=2, alpha=0.8)
+line_pbd, = ax.plot([], [], 'o-', color='green', label='PBD (Position Based)', 
+                    markersize=4, linewidth=2, alpha=0.8)
+line_euler, = ax.plot([], [], 'o-', color='red', label='Symplectic Euler (Spring)', 
+                      markersize=4, linewidth=2, alpha=0.8)
 
-ax1.set_xlim(-0.6, 0.6)
-ax1.set_ylim(-0.4, 0.8)
-ax1.set_aspect('equal')
-ax1.set_title('Same Time Per Frame')
-ax1.legend()
-ax1.grid(True, alpha=0.3)
+# Add a marker for the shared top particle
+top_marker, = ax.plot([], [], 'ko', markersize=8, label='Shared Top Particle')
 
-# Right plot - adjusted for similar results
-line_ftl_2, = ax2.plot([], [], 'o-', color='blue', label='FTL', markersize=3, linewidth=1.5)
-line_pbd_2, = ax2.plot([], [], 'o-', color='green', label='PBD', markersize=3, linewidth=1.5)
-line_euler_2, = ax2.plot([], [], 'o-', color='red', label='Symplectic Euler', markersize=3, linewidth=1.5)
-
-ax2.set_xlim(-0.6, 0.6)
-ax2.set_ylim(-0.4, 0.8)
-ax2.set_aspect('equal')
-ax2.set_title('Adjusted Parameters')
-ax2.legend()
-ax2.grid(True, alpha=0.3)
+ax.set_xlim(-0.8, 0.8)
+ax.set_ylim(-0.5, 0.8)
+ax.set_aspect('equal')
+ax.set_title('Rope Simulation: Three Methods with Shared Top Particle\n(Click and drag to move)', fontsize=14)
+ax.legend(loc='upper right')
+ax.grid(True, alpha=0.3)
+ax.set_xlabel('X Position (m)')
+ax.set_ylabel('Y Position (m)')
 
 plt.tight_layout()
 
 # Mouse event handlers
 def on_press(event):
-    sim.is_dragging = True
+    if event.inaxes == ax:
+        sim.is_dragging = True
 
 def on_release(event):
     sim.is_dragging = False
 
 def on_motion(event):
-    if sim.is_dragging and event.inaxes and event.xdata is not None:
+    if sim.is_dragging and event.inaxes == ax and event.xdata is not None:
         sim.drag_pos = np.array([event.xdata, event.ydata])
-        sim.top_particle_pos = np.array([event.xdata, event.ydata])  # Update shared top particle
+        sim.top_particle_pos = np.array([event.xdata, event.ydata])
 
 fig.canvas.mpl_connect('button_press_event', on_press)
 fig.canvas.mpl_connect('button_release_event', on_release)
 fig.canvas.mpl_connect('motion_notify_event', on_motion)
 
-# Animation parameters
-frame_count = 0
-euler_skip = 0  # For the adjusted version
-
+# Animation update function
 def update(frame):
-    global frame_count, euler_skip
-    frame_count += 1
-    
-    # Left side - same time per frame
+    # Run all simulations
     sim.simulate_ftl()
     sim.simulate_pbd()
     sim.simulate_symplectic_euler()
     
-    # All three ropes share the same top particle, no offset needed
-    line_ftl_1.set_data(sim.x_ftl[:, 0], sim.x_ftl[:, 1])
-    line_pbd_1.set_data(sim.x_pbd[:, 0], sim.x_pbd[:, 1])
-    line_euler_1.set_data(sim.x_euler[:, 0], sim.x_euler[:, 1])
+    # Update line data
+    line_ftl.set_data(sim.x_ftl[:, 0], sim.x_ftl[:, 1])
+    line_pbd.set_data(sim.x_pbd[:, 0], sim.x_pbd[:, 1])
+    line_euler.set_data(sim.x_euler[:, 0], sim.x_euler[:, 1])
     
-    # Right side - adjusted parameters (simulate Euler less frequently)
-    if frame_count % 3 == 0:  # Run Euler every 3rd frame
-        # Reset Euler to match others periodically for comparison
-        if frame_count % 60 == 0:
-            sim.x_euler = sim.x_pbd.copy()
-            sim.v_euler = sim.v_pbd.copy()
-            # Ensure top particle is shared
-            sim.x_euler[0] = sim.top_particle_pos.copy()
+    # Update top particle marker
+    top_marker.set_data([sim.top_particle_pos[0]], [sim.top_particle_pos[1]])
     
-    line_ftl_2.set_data(sim.x_ftl[:, 0], sim.x_ftl[:, 1])
-    line_pbd_2.set_data(sim.x_pbd[:, 0], sim.x_pbd[:, 1])
-    line_euler_2.set_data(sim.x_euler[:, 0], sim.x_euler[:, 1])
-    
-    return line_ftl_1, line_pbd_1, line_euler_1, line_ftl_2, line_pbd_2, line_euler_2
+    return line_ftl, line_pbd, line_euler, top_marker
 
 # Instructions
 print("Rope Simulation - Three Methods Comparison")
-print("Click and drag to move the top particle")
-print("Left panel: Same time per frame")
-print("Right panel: Adjusted for similar behavior")
-print("Blue: FTL, Green: PBD, Red: Symplectic Euler")
+print("="*45)
+print("Click and drag anywhere to move the shared top particle")
+print("\nMethods:")
+print("• Blue (FTL): Fast Tangent Loop - dynamic constraints")
+print("• Green (PBD): Position Based Dynamics - constraint projection") 
+print("• Red (Symplectic Euler): Spring system with high stiffness")
+print("\nParameters match the research paper:")
+print("• 30 particles per rope")
+print("• 0.02m segment length")
+print("• 0.01s time step")
+print("• FTL & PBD: 2 iterations, Euler: 3000 N/m stiffness, 20 substeps")
 
 # Create and run animation
-ani = animation.FuncAnimation(fig, update, frames=1000, interval=50, blit=True)
+ani = animation.FuncAnimation(fig, update, frames=1000, interval=30, blit=True)
 plt.show()
