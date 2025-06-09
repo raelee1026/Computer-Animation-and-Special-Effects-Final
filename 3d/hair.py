@@ -12,15 +12,37 @@ ti.init()
 # Configuration
 #----------------------------------------
 
+FRAMES_INDEX = 0 # index of the animation to run
+STEPS_INDEX = 0 # index of the steps to run
+DAMPING_INDEX = 0 # index of the damping factor to run
+STIFFNESS_GLOBAL_INDEX = 0 # index of the global stiffness to run
+STIFFNESS_LOCAL_INDEX = 0 # index of the local stiffness to run
+FRCITION_INDEX = 0 # index of the friction to run
+
+frames_list = [250, 500, 750, 1000] # number of frames for each animation
+steps_list = [10, 20, 30, 40] # number of steps for each animation
+damping_list = [0.99, 0.95, 0.9, 0.85] # damping factor for each animation
+stiffness_global_list = [0.001, 0.002, 0.003, 0.004] # global stiffness for each animation
+stiffness_local_list = [0.05, 0.1, 0.15, 0.2] # local stiffness for each animation
+friction_list = [0.08, 0.1, 0.12, 0.15] # friction for hair-hair interaction
+
+
 # user settings
-frames = 250
-steps = 10
+# frames = 250
+frames = frames_list[FRAMES_INDEX]
+
+# steps = 10
+steps = steps_list[STEPS_INDEX]
 dt = 4e-3
-damping = 0.99
+# damping = 0.99
+damping = damping_list[DAMPING_INDEX]
 grav_acc = ti.Vector([0., 0., -9.8]) # gravity
 # shape constraints
-stiffness_global = 0.001
-stiffness_local = 0.05
+# stiffness_global = 0.001
+# stiffness_local = 0.05
+
+stiffness_global = stiffness_global_list[STIFFNESS_GLOBAL_INDEX]
+stiffness_local = stiffness_local_list[STIFFNESS_LOCAL_INDEX]
 damping_ftl = 0.9
 # collision
 decimate_ratio = 0.3 # resolution of collision mesh
@@ -30,7 +52,8 @@ coll_margin = 0.0
 # hair-hair interaction
 vf_cell_size = 0.01
 vf_pad = 2.
-friction = 0.08
+# friction = 0.08
+friction = friction_list[FRCITION_INDEX]
 #repulsion = 0.1
 # animation
 def custom_translation(frame):
